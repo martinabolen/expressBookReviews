@@ -1,66 +1,65 @@
 const express = require('express');
+const session = require('express-session');
 const jwt = require('jsonwebtoken');
 let books = require("./booksdb.js");
 
 const regd_users = express.Router();
 let users = [];
 
-const secretKey = "your-secret-key"; // Use env variable in production
+const isValid = (username) => users.some(user => user.username === username);
+const authenticateJWT = (req, res, next) => {
+    const authHeader = req.headers['authorization'];  // Get the Authorization header
 
-// Function to check if the username is valid
-const isValid = (username) => {
-    return users.some(user => user.username === username);
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+        const token = authHeader.split(" ")[1];  // Extract token from "Bearer <token>"
+
+        jwt.verify(token, "access", (err, user) => {
+            if (!err) {
+                req.user = user;  // Attach user info to request
+                return next();
+            } else {
+                return res.status(403).json({ message: "User not authenticated" });
+            }
+        });
+    } else {
+        return res.status(403).json({ message: "No token provided" });
+    }
 };
 
-// Check if the user with the given username and password exists
-const authenticatedUser = (username, password) => {
-    return users.some(user => user.username === username && user.password === password);
-};
 
-// Login route to generate JWT token
+const app = express();
+app.use(express.json());
+app.use(session({
+    secret: "fingerprint",
+    resave: false,
+    saveUninitialized: true
+}));
+
+// Login Route
 regd_users.post("/login", (req, res) => {
     const { username, password } = req.body;
 
-    if (!username || !password) {
-        return res.status(400).json({ message: "Username and password are required" });
+    if (!isValid(username)) {
+        return res.status(401).json({ message: "Invalid username" });
     }
 
-    if (!authenticatedUser(username, password)) {
-        return res.status(401).json({ message: "Invalid username or password" });
+    if (!users.some(user => user.username === username && user.password === password)) {
+        return res.status(401).json({ message: "Incorrect password" });
     }
 
-    // Generate JWT token
-    const token = jwt.sign({ username }, secretKey, { expiresIn: "1h" });
+    const accessToken = jwt.sign({ username }, "access", { expiresIn: "1h" });
 
-    return res.status(200).json({ token });
+    req.session.authorization = { accessToken };
+
+    return res.status(200).json({ message: "Login successful", token: accessToken });
 });
 
-// Middleware to authenticate user via JWT
-const authenticateJWT = (req, res, next) => {
-    const authHeader = req.headers["authorization"];
-    if (!authHeader) {
-        console.log("Authorization Header:", authHeader); // Debugging log
-        return res.status(401).json({ message: "Unauthorized. No token provided." });
-    }
-  
-
-    const token = authHeader.split(" ")[1];
-
-    jwt.verify(token, secretKey, (err, decoded) => {
-        if (err) {
-            return res.status(403).json({ message: "Forbidden. Invalid token." });
-        }
-
-        req.user = decoded; // Attach decoded user info to request object
-        next();
-    });
-};
-
-// PUT Review API (Authenticated Users Only)
+// PUT Review API
+// Update the PUT Review API
 regd_users.put("/auth/review/:isbn", authenticateJWT, (req, res) => {
     const { isbn } = req.params;
-    const review = req.query.review;
-    const username = req.user.username; // Extracted from decoded token
+    const { review } = req.body;  // Changed to req.body
+    const username = req.user.username;
 
     if (!books[isbn]) {
         return res.status(404).json({ message: "Book not found" });
@@ -82,7 +81,7 @@ regd_users.put("/auth/review/:isbn", authenticateJWT, (req, res) => {
     });
 });
 
+
 module.exports.authenticated = regd_users;
 module.exports.isValid = isValid;
 module.exports.users = users;
- 
